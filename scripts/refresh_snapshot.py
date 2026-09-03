@@ -25,8 +25,10 @@ async def main():
     # Actions runners are ephemeral, so complete the minimum stability sample
     # in this run instead of waiting for a later runner.
     first = await check_all(db)
-    await asyncio.sleep(2)
-    second = await check_all(db)
+    # A second pass is only needed for proxies that passed the first one.
+    # This preserves the two-success stability rule without retesting every
+    # known-dead public endpoint.
+    second = await check_all(db, alive_only=True)
     proxies = await db.healthy(500)
     os.makedirs("data", exist_ok=True)
     with open("data/proxies.txt", "w", encoding="utf-8") as f:

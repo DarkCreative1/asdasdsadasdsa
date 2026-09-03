@@ -3,13 +3,16 @@ name: Proxy pool refresh
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '*/5 * * * *'
 
 permissions:
   contents: write
 
 jobs:
   refresh:
+    concurrency:
+      group: proxy-refresh
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

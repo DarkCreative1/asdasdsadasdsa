@@ -44,10 +44,11 @@ class Database:
                     (int(alive), latency, now(), int(alive), int(not alive), int(alive), int(alive), now(), proxy))
         await asyncio.to_thread(work)
 
-    async def candidates(self):
+    async def candidates(self, alive_only: bool = False):
         def work():
             with sqlite3.connect(self.path) as c:
-                return [r[0] for r in c.execute("SELECT proxy FROM proxies ORDER BY alive DESC, success_rate DESC, latency_ms ASC NULLS LAST")]
+                where = "WHERE alive=1" if alive_only else ""
+                return [r[0] for r in c.execute(f"SELECT proxy FROM proxies {where} ORDER BY alive DESC, success_rate DESC, latency_ms ASC NULLS LAST")]
         return await asyncio.to_thread(work)
 
     async def healthy(self, limit: int):

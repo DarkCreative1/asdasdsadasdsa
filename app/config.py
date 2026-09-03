@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     target_pool_size: int = 50
     fetch_interval_seconds: int = 300
     check_interval_seconds: int = 30
-    check_concurrency: int = 150
+    check_concurrency: int = 300
     check_timeout_seconds: float = 2.0
     min_success_rate: float = 1.0
     min_checks: int = 2

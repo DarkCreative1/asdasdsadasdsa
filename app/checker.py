@@ -49,10 +49,10 @@ async def check_one(proxy: str, db: Database, semaphore: asyncio.Semaphore):
             return {"alive": False, "error": type(exc).__name__}
 
 
-async def check_all(db: Database):
+async def check_all(db: Database, alive_only: bool = False):
     # Checking in bounded batches prevents thousands of public entries from
     # creating an unbounded number of tasks and file descriptors.
-    proxies = await db.candidates()
+    proxies = await db.candidates(alive_only=alive_only)
     if settings.max_candidates_per_cycle > 0:
         proxies = proxies[: settings.max_candidates_per_cycle]
     semaphore = asyncio.Semaphore(settings.check_concurrency)
