@@ -4,8 +4,6 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import { settings } from './config.js';
 
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
 function agentsFor(proxy) {
   const normalized = proxy.startsWith('https://') ? `http://${proxy.slice(8)}` : proxy;
   if (normalized.startsWith('socks4://') || normalized.startsWith('socks5://')) {
@@ -15,7 +13,7 @@ function agentsFor(proxy) {
   return { httpAgent: new HttpProxyAgent(normalized), httpsAgent: new HttpsProxyAgent(normalized) };
 }
 
-async function probe(proxy) {
+async function probe(proxy, signal) {
   const agents = agentsFor(proxy);
   try {
     for (const target of settings.checkTargets) {
@@ -23,6 +21,7 @@ async function probe(proxy) {
         ...agents,
         proxy: false,
         timeout: settings.checkTimeoutSeconds * 1000,
+        signal,
         maxRedirects: 0,
         validateStatus: () => true,
         headers: { 'User-Agent': 'proxy-pool-health-check/3.0' },
@@ -38,16 +37,20 @@ async function probe(proxy) {
 
 export async function checkOne(proxy) {
   const started = performance.now();
+  const timeoutMs = settings.checkTimeoutSeconds * 1000;
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(), timeoutMs);
+  deadline.unref?.();
   try {
-    const passed = await Promise.race([
-      probe(proxy),
-      (async () => { await wait((settings.checkTimeoutSeconds + 0.25) * 1000); throw new Error('CheckDeadlineExceeded'); })(),
-    ]);
+    const passed = await probe(proxy, controller.signal);
     const latency = Math.round((performance.now() - started) * 100) / 100;
-    const alive = passed && latency <= settings.checkTimeoutSeconds * 1000;
+    const alive = passed && latency <= timeoutMs;
     return { proxy, alive, latency: alive ? latency : null, error: null };
   } catch (error) {
-    return { proxy, alive: false, latency: null, error: error?.name || error?.message || 'Error' };
+    const reason = controller.signal.aborted ? 'TimeoutError' : (error?.code || error?.name || error?.message || 'Error');
+    return { proxy, alive: false, latency: null, error: reason };
+  } finally {
+    clearTimeout(deadline);
   }
 }
 
@@ -58,7 +61,14 @@ async function mapConcurrent(values, concurrency, mapper) {
     while (true) {
       const index = next++;
       if (index >= values.length) return;
-      results[index] = await mapper(values[index]);
+      try {
+        results[index] = await mapper(values[index]);
+      } catch (error) {
+        results[index] = {
+          proxy: values[index], alive: false, latency: null,
+          error: `Unexpected:${error?.name || 'Error'}`,
+        };
+      }
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, worker));
@@ -68,26 +78,31 @@ async function mapConcurrent(values, concurrency, mapper) {
 export async function checkAll(db, { aliveOnly = false, staleOnly = false } = {}) {
   let proxies = db.candidates({ aliveOnly, staleOnly });
   if (settings.maxCandidatesPerCycle > 0) proxies = proxies.slice(0, settings.maxCandidatesPerCycle);
-  const results = await mapConcurrent(proxies, settings.checkConcurrency, checkOne);
-  const checks = [];
   const errorTypes = {};
   let failed = 0;
-  for (const result of results) {
-    if (!result.alive) {
-      failed += 1;
-      if (result.error) errorTypes[result.error] = (errorTypes[result.error] || 0) + 1;
-      checks.push([result.proxy, false, null]);
-    } else {
-      checks.push([result.proxy, true, result.latency]);
-    }
-  }
   let unexpected = 0;
-  try {
-    db.updateChecks(checks);
-  } catch (error) {
-    unexpected = checks.length;
-    const name = `database:${error.name || 'Error'}`;
-    errorTypes[name] = (errorTypes[name] || 0) + checks.length;
+  const batchSize = Math.max(settings.checkConcurrency, settings.checkPersistBatchSize);
+
+  for (let offset = 0; offset < proxies.length; offset += batchSize) {
+    const batch = proxies.slice(offset, offset + batchSize);
+    const results = await mapConcurrent(batch, settings.checkConcurrency, checkOne);
+    const checks = [];
+    for (const result of results) {
+      if (!result.alive) {
+        failed += 1;
+        if (result.error) errorTypes[result.error] = (errorTypes[result.error] || 0) + 1;
+        checks.push([result.proxy, false, null]);
+      } else {
+        checks.push([result.proxy, true, result.latency]);
+      }
+    }
+    try {
+      db.updateChecks(checks);
+    } catch (error) {
+      unexpected += checks.length;
+      const name = `database:${error.name || 'Error'}`;
+      errorTypes[name] = (errorTypes[name] || 0) + checks.length;
+    }
   }
   return { tested: proxies.length, failed, unexpected, errorTypes };
 }

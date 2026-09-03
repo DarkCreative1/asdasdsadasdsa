@@ -16,9 +16,10 @@ try {
   for (const { source, result } of fetched) {
     if (result.status === 'fulfilled') {
       candidates += result.value.size;
-      db.addMany(result.value, source[0]);
+      db.addMany(result.value, source[0], { persist: false });
     }
   }
+  if (candidates > 0) db.save();
   settings.maxCandidatesPerCycle = Math.max(0, limitArg);
   const first = await checkAll(db);
   const second = await checkAll(db, { aliveOnly: true });

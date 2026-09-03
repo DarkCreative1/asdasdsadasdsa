@@ -36,13 +36,14 @@ async function main() {
     if (result.status === 'fulfilled') {
       const count = result.value.size;
       fetchedCandidates += count;
-      db.addMany(result.value, source[0]);
+      db.addMany(result.value, source[0], { persist: false });
       console.log(`[source] ${source[0]}: ${count}`);
     } else {
       failedSources += 1;
       console.log(`[source] ${source[0]}: hata (${result.reason?.name || 'Error'})`);
     }
   }
+  if (fetchedCandidates > 0) db.save();
 
   const first = await checkAll(db);
   const second = await checkAll(db, { aliveOnly: true });

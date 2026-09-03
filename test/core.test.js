@@ -3,10 +3,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createRequire } from 'node:module';
+import initSqlJs from 'sql.js';
 import { Database } from '../src/db.js';
 import { checkAll, checkOne } from '../src/checker.js';
 import { parseSourceText } from '../src/sources.js';
 import { settings } from '../src/config.js';
+
+const require = createRequire(import.meta.url);
+const wasmPath = require.resolve('sql.js/dist/sql-wasm.wasm');
 
 async function makeDb() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proxy-pool-test-'));
@@ -57,6 +62,109 @@ test('a proxy needs two successful checks before it is stable', async () => {
     db.updateCheck(proxy, true, 10);
     assert.deepEqual(db.healthy(), []);
     db.updateCheck(proxy, true, 10);
+    assert.deepEqual(db.healthy(), [proxy]);
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a proxy recovers after a temporary failure without resetting lifetime statistics', async () => {
+  const { dir, db } = await makeDb();
+  try {
+    const proxy = 'http://127.0.0.1:8081';
+    db.addMany(new Set([proxy]), 'test');
+    db.updateCheck(proxy, true, 10);
+    db.updateCheck(proxy, true, 10);
+    assert.deepEqual(db.healthy(), [proxy]);
+
+    db.updateCheck(proxy, false, null);
+    assert.deepEqual(db.healthy(), []);
+    db.updateCheck(proxy, true, 10);
+    assert.deepEqual(db.healthy(), []);
+    db.updateCheck(proxy, true, 10);
+    assert.deepEqual(db.healthy(), [proxy]);
+
+    const record = db.queryOne('SELECT successes, failures, success_rate FROM proxies WHERE proxy=?', [proxy]);
+    assert.deepEqual({ successes: record.successes, failures: record.failures }, { successes: 4, failures: 1 });
+    assert.ok(record.success_rate < 1);
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('prune reports deleted rows and persists the deletion', async () => {
+  const { dir, db } = await makeDb();
+  const databasePath = path.join(dir, 'test.db');
+  try {
+    const proxy = 'http://127.0.0.1:8082';
+    db.addMany(new Set([proxy]), 'test');
+    db.updateCheck(proxy, false, null);
+    assert.equal(db.prune(), 1);
+    assert.equal(db.stats().total, 0);
+  } finally {
+    db.close();
+  }
+
+  const reopened = await Database.open(databasePath);
+  try {
+    assert.equal(reopened.stats().total, 0);
+  } finally {
+    reopened.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an existing database is migrated and can recover normally', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proxy-pool-legacy-'));
+  const databasePath = path.join(dir, 'legacy.db');
+  const SQL = await initSqlJs({ locateFile: () => wasmPath });
+  const legacy = new SQL.Database();
+  legacy.run(`CREATE TABLE proxies (
+    proxy TEXT PRIMARY KEY, protocol TEXT NOT NULL, alive INTEGER DEFAULT 0,
+    latency_ms REAL, successes INTEGER DEFAULT 0, failures INTEGER DEFAULT 0,
+    last_checked TEXT, last_success TEXT, source TEXT, created_at TEXT NOT NULL,
+    check_count INTEGER DEFAULT 0, success_rate REAL DEFAULT 0
+  )`);
+  legacy.run(`INSERT INTO proxies VALUES (
+    'http://127.0.0.1:8083', 'http', 0, NULL, 10, 1,
+    '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', 'legacy',
+    '2026-01-01T00:00:00.000Z', 11, 0.909
+  )`);
+  fs.writeFileSync(databasePath, Buffer.from(legacy.export()));
+  legacy.close();
+
+  const db = await Database.open(databasePath);
+  try {
+    assert.deepEqual(db.healthy(), []);
+    db.updateCheck('http://127.0.0.1:8083', true, 10);
+    assert.deepEqual(db.healthy(), []);
+    db.updateCheck('http://127.0.0.1:8083', true, 10);
+    assert.deepEqual(db.healthy(), ['http://127.0.0.1:8083']);
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a 90-hour equivalent history does not permanently poison a proxy', async () => {
+  const { dir, db } = await makeDb();
+  try {
+    const proxy = 'http://127.0.0.1:8084';
+    db.addMany(new Set([proxy]), 'endurance');
+    const minuteChecks = Array.from({ length: 90 * 60 }, (_, minute) => {
+      const alive = minute % 503 !== 250;
+      return [proxy, alive, alive ? 10 : null];
+    });
+    db.updateChecks(minuteChecks);
+    const record = db.queryOne(`SELECT check_count, failures, success_rate,
+      recent_checks, recent_successes FROM proxies WHERE proxy=?`, [proxy]);
+    assert.equal(record.check_count, 5400);
+    assert.ok(record.failures > 0);
+    assert.ok(record.success_rate < 1);
+    assert.equal(record.recent_checks, settings.minChecks);
+    assert.equal(record.recent_successes, settings.minChecks);
     assert.deepEqual(db.healthy(), [proxy]);
   } finally {
     db.close();

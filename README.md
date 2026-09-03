@@ -1,6 +1,6 @@
 # Proxy Pool
 
-Node.js tabanlı proxy havuzu; HTTP, HTTPS, SOCKS4 ve SOCKS5 kaynaklarını toplar, Google `generate_204` ile kontrol eder ve yalnızca en az iki kontrolde %100 başarılı olan proxyleri yayınlar. Bozuk bir proxy hiçbir zaman tüm batch’i durdurmaz.
+Node.js tabanlı proxy havuzu; HTTP, HTTPS, SOCKS4 ve SOCKS5 kaynaklarını toplar, Google `generate_204` ile kontrol eder ve yalnızca son kontrol penceresinde en az iki kontrolde %100 başarılı olan proxyleri yayınlar. Geçici olarak bozulan bir proxy iki yeni başarılı kontrolden sonra tekrar havuza girebilir; tek bir bozuk proxy hiçbir zaman tüm batch’i durdurmaz.
 
 ## Yerel çalıştırma
 
@@ -24,7 +24,7 @@ node scripts/refresh_snapshot.js
 
 Bu komut kaynakları yerel SQLite veritabanına yazar, iki kontrol turu yapar ve `data/proxies.txt` ile `data/proxies.json` dosyalarını günceller. `MAX_CANDIDATES_PER_CYCLE=0` tüm adayları test eder. Varsayılan kontrol timeout’u 2 saniyedir.
 
-VPS çalışma varsayılanları dengeli tutulur: kaynak yenileme 300 saniye, tarama turu 10 saniye, bayatlık süresi 60 saniye ve 100 eşzamanlı proxy kontrolü. Proxy havuzu her 10 saniyede yenilenirken kaynak listelerini her dakika tekrar çekmek public kaynaklarda rate-limit ve VPS bağlantı havuzu tükenmesine yol açabilir. `CHECK_CONCURRENCY` ve `SOURCE_FETCH_CONCURRENCY` değerlerini VPS kaynaklarına göre ayarlayabilirsiniz.
+VPS çalışma varsayılanları dengeli tutulur: kaynak yenileme 300 saniye, tarama turu 10 saniye, bayatlık süresi 60 saniye ve 100 eşzamanlı proxy kontrolü. Uzun taramalar `CHECK_PERSIST_BATCH_SIZE` kadar parçalar halinde kaydedilir ve veritabanı dosyası atomik olarak değiştirilir; ani yeniden başlatma sırasında yarım SQLite dosyası bırakılmaz. Proxy havuzu her 10 saniyede yenilenirken kaynak listelerini her dakika tekrar çekmek public kaynaklarda rate-limit ve VPS bağlantı havuzu tükenmesine yol açabilir. `CHECK_CONCURRENCY` ve `SOURCE_FETCH_CONCURRENCY` değerlerini VPS kaynaklarına göre ayarlayabilirsiniz.
 
 ## Railway / VPS (saf Node.js)
 
@@ -52,7 +52,7 @@ npm test
 node scripts/smoke_test.js 100
 ```
 
-Unit testleri batch izolasyonunu, bozuk SOCKS proxylerini, timeout davranışını, kaynak ayrıştırmayı ve iki başarılı kontrol şartını doğrular.
+Unit testleri batch izolasyonunu, bozuk SOCKS proxylerini, timeout davranışını, kaynak ayrıştırmayı, iki başarılı kontrol şartını ve geçici hatadan sonra havuza geri dönüşü doğrular.
 
 ## GitHub Actions
 

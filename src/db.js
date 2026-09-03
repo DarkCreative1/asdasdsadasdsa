@@ -9,6 +9,9 @@ const wasmPath = require.resolve('sql.js/dist/sql-wasm.wasm');
 
 const updateSql = `UPDATE proxies SET alive=?, latency_ms=?, last_checked=?, check_count=check_count+1,
   successes=successes+?, failures=failures+?, success_rate=CAST(successes+? AS REAL)/(check_count+1),
+  recent_successes=CASE WHEN recent_checks < ? THEN recent_successes+?
+    ELSE recent_successes+?-((recent_results >> (?-1)) & 1) END,
+  recent_checks=MIN(recent_checks+1, ?), recent_results=((recent_results << 1) | ?) & ?,
   last_success=CASE WHEN ? THEN ? ELSE last_success END WHERE proxy=?`;
 
 export class Database {
@@ -26,13 +29,51 @@ export class Database {
       proxy TEXT PRIMARY KEY, protocol TEXT NOT NULL, alive INTEGER DEFAULT 0,
       latency_ms REAL, successes INTEGER DEFAULT 0, failures INTEGER DEFAULT 0,
       last_checked TEXT, last_success TEXT, source TEXT, created_at TEXT NOT NULL,
-      check_count INTEGER DEFAULT 0, success_rate REAL DEFAULT 0
+      check_count INTEGER DEFAULT 0, success_rate REAL DEFAULT 0,
+      recent_results INTEGER DEFAULT 0, recent_checks INTEGER DEFAULT 0,
+      recent_successes INTEGER DEFAULT 0
     )`);
+    this.migrate();
     this.save();
   }
 
+  migrate() {
+    const columns = new Set(this.queryAll('PRAGMA table_info(proxies)').map((column) => column.name));
+    const additions = [
+      ['recent_results', 'INTEGER DEFAULT 0'],
+      ['recent_checks', 'INTEGER DEFAULT 0'],
+      ['recent_successes', 'INTEGER DEFAULT 0'],
+    ];
+    let migrated = false;
+    for (const [name, definition] of additions) {
+      if (!columns.has(name)) {
+        this.db.run(`ALTER TABLE proxies ADD COLUMN ${name} ${definition}`);
+        migrated = true;
+      }
+    }
+    if (migrated) {
+      // Require fresh evidence after upgrading, while preserving one current result.
+      this.db.run(`UPDATE proxies SET
+        recent_results=CASE WHEN alive=1 THEN 1 ELSE 0 END,
+        recent_checks=CASE WHEN last_checked IS NULL THEN 0 ELSE 1 END,
+        recent_successes=CASE WHEN alive=1 THEN 1 ELSE 0 END`);
+    }
+  }
+
   save() {
-    fs.writeFileSync(this.path, Buffer.from(this.db.export()));
+    const temporaryPath = `${this.path}.${process.pid}.tmp`;
+    let file;
+    try {
+      file = fs.openSync(temporaryPath, 'w');
+      fs.writeFileSync(file, Buffer.from(this.db.export()));
+      fs.fsyncSync(file);
+      fs.closeSync(file);
+      file = undefined;
+      fs.renameSync(temporaryPath, this.path);
+    } finally {
+      if (file !== undefined) fs.closeSync(file);
+      if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
+    }
   }
 
   queryAll(sql, params = []) {
@@ -51,7 +92,7 @@ export class Database {
     return this.queryAll(sql, params)[0] || null;
   }
 
-  addMany(proxies, source) {
+  addMany(proxies, source, { persist = true } = {}) {
     if (!proxies.size) return;
     const statement = this.db.prepare(`INSERT INTO proxies(proxy, protocol, source, created_at)
       VALUES(?,?,?,?) ON CONFLICT(proxy) DO UPDATE SET source=excluded.source`);
@@ -64,7 +105,7 @@ export class Database {
     } finally {
       statement.free();
     }
-    this.save();
+    if (persist) this.save();
   }
 
   updateCheck(proxy, alive, latency) {
@@ -79,7 +120,13 @@ export class Database {
     try {
       for (const [proxy, alive, latency] of checks) {
         const flag = alive ? 1 : 0;
-        statement.run([flag, latency, checkedAt, flag, alive ? 0 : 1, flag, flag, checkedAt, proxy]);
+        const windowSize = settings.minChecks;
+        const windowMask = (2 ** windowSize) - 1;
+        statement.run([
+          flag, latency, checkedAt, flag, alive ? 0 : 1, flag,
+          windowSize, flag, flag, windowSize, windowSize, flag, windowMask,
+          flag, checkedAt, proxy,
+        ]);
         statement.reset();
       }
       this.db.run('COMMIT');
@@ -111,20 +158,22 @@ export class Database {
   }
 
   healthy(limit = 500) {
-    return this.queryAll(`SELECT proxy FROM proxies WHERE alive=1 AND check_count>=?
-      AND success_rate>=? ORDER BY latency_ms ASC LIMIT ?`, [settings.minChecks, settings.minSuccessRate, limit])
+    return this.queryAll(`SELECT proxy FROM proxies WHERE alive=1 AND recent_checks>=?
+      AND CAST(recent_successes AS REAL)/recent_checks>=? ORDER BY latency_ms ASC LIMIT ?`, [settings.minChecks, settings.minSuccessRate, limit])
       .map((row) => row.proxy);
   }
 
   healthyProtocol(protocol, limit = 500) {
     return this.queryAll(`SELECT proxy FROM proxies WHERE protocol=? AND alive=1
-      AND check_count>=? AND success_rate>=? ORDER BY latency_ms ASC LIMIT ?`, [protocol, settings.minChecks, settings.minSuccessRate, limit])
+      AND recent_checks>=? AND CAST(recent_successes AS REAL)/recent_checks>=?
+      ORDER BY latency_ms ASC LIMIT ?`, [protocol, settings.minChecks, settings.minSuccessRate, limit])
       .map((row) => row.proxy);
   }
 
   stats() {
     const row = this.queryOne(`SELECT COUNT(*) AS total, COALESCE(SUM(alive),0) AS alive,
-      COALESCE(SUM(CASE WHEN alive=1 AND check_count>=? AND success_rate>=? THEN 1 ELSE 0 END),0) AS stable,
+      COALESCE(SUM(CASE WHEN alive=1 AND recent_checks>=?
+        AND CAST(recent_successes AS REAL)/recent_checks>=? THEN 1 ELSE 0 END),0) AS stable,
       COALESCE(AVG(CASE WHEN alive=1 THEN latency_ms END),0) AS latency FROM proxies`, [settings.minChecks, settings.minSuccessRate]);
     const bySource = Object.fromEntries(this.queryAll('SELECT source, COUNT(*) AS count FROM proxies GROUP BY source').map((item) => [item.source, item.count]));
     return { total: row.total, healthy: row.stable, stable: row.stable, alive_latest: row.alive, average_latency_ms: Math.round(row.latency * 100) / 100, by_source: bySource };
@@ -132,15 +181,17 @@ export class Database {
 
   protocolCounts() {
     return Object.fromEntries(this.queryAll(`SELECT UPPER(protocol) AS protocol, COUNT(*) AS count
-      FROM proxies WHERE alive=1 AND check_count>=? AND success_rate>=? GROUP BY protocol`, [settings.minChecks, settings.minSuccessRate])
+      FROM proxies WHERE alive=1 AND recent_checks>=?
+        AND CAST(recent_successes AS REAL)/recent_checks>=? GROUP BY protocol`, [settings.minChecks, settings.minSuccessRate])
       .map((item) => [item.protocol, item.count]));
   }
 
   prune() {
-    const result = this.db.run(`DELETE FROM proxies WHERE (last_checked IS NOT NULL AND last_success IS NULL)
-      OR (failures >= 5 AND success_rate < ? )`, [settings.minSuccessRate]);
-    if (result.changes) this.save();
-    return result.changes;
+    this.db.run(`DELETE FROM proxies WHERE (last_checked IS NOT NULL AND last_success IS NULL)
+      OR (alive=0 AND recent_checks>=? AND recent_successes=0)`, [settings.minChecks]);
+    const changes = this.db.getRowsModified();
+    if (changes > 0) this.save();
+    return changes;
   }
 
   close() {

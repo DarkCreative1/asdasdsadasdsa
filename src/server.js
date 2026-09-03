@@ -10,6 +10,20 @@ let workerRunning = false;
 let refreshInProgress = false;
 let lastRefresh = null;
 let lastCheck = null;
+let lastFetchAt = 0;
+let workerTimer = null;
+let wakeWorker = null;
+let shuttingDown = false;
+
+function workerDelay(milliseconds) {
+  return new Promise((resolve) => {
+    wakeWorker = resolve;
+    workerTimer = setTimeout(resolve, milliseconds);
+  }).finally(() => {
+    workerTimer = null;
+    wakeWorker = null;
+  });
+}
 
 function auth(req, res, next) {
   if (settings.apiKey && req.get('X-API-Key') !== settings.apiKey) return res.status(401).json({ error: 'Invalid API key' });
@@ -20,18 +34,22 @@ async function fetchAll() {
   const results = await fetchAllSources();
   const summary = {};
   let total = 0;
+  let changed = false;
   for (const { source, result } of results) {
     if (result.status === 'fulfilled') {
-      db.addMany(result.value, source[0]);
+      db.addMany(result.value, source[0], { persist: false });
       summary[source[0]] = result.value.size;
       total += result.value.size;
+      changed ||= result.value.size > 0;
     } else {
       summary[source[0]] = 0;
       const reason = result.reason;
       console.error(`[source] ${source[0]} failed: ${reason?.code || reason?.response?.status || reason?.name || 'Error'}`);
     }
   }
+  if (changed) db.save();
   lastRefresh = new Date().toISOString();
+  lastFetchAt = Date.now();
   console.log(`[worker] sources=${SOURCES.length} candidates=${total}`);
   return summary;
 }
@@ -40,26 +58,29 @@ async function refreshCycle() {
   if (refreshInProgress) throw new Error('Refresh already running');
   refreshInProgress = true;
   try {
-  const sources = await fetchAll();
-  const first = await checkAll(db, { staleOnly: true });
-  const second = await checkAll(db, { aliveOnly: true });
-  const pruned = db.prune();
-  lastCheck = new Date().toISOString();
-  return { sources, first, second, pruned };
+    const sources = await fetchAll();
+    const first = await checkAll(db, { staleOnly: true });
+    const second = await checkAll(db, { aliveOnly: true });
+    const pruned = db.prune();
+    lastCheck = new Date().toISOString();
+    return { sources, first, second, pruned };
   } finally {
     refreshInProgress = false;
   }
 }
 
 async function worker() {
-  let lastFetchAt = 0;
   while (workerRunning) {
+    if (refreshInProgress) {
+      await workerDelay(settings.checkIntervalSeconds * 1000);
+      continue;
+    }
+    refreshInProgress = true;
     try {
       const now = Date.now();
       let fetchedThisCycle = false;
       if (now - lastFetchAt >= settings.fetchIntervalSeconds * 1000) {
         await fetchAll();
-        lastFetchAt = Date.now();
         fetchedThisCycle = true;
       }
       const first = await checkAll(db, { staleOnly: true });
@@ -70,8 +91,10 @@ async function worker() {
       console.log(`[worker] tested=${first.tested + (second?.tested || 0)} stable=${stats.stable} failed=${first.failed + (second?.failed || 0)}`);
     } catch (error) {
       console.error(`[worker] ${error.name || 'Error'}: ${error.message || error}`);
+    } finally {
+      refreshInProgress = false;
     }
-    await new Promise((resolve) => setTimeout(resolve, settings.checkIntervalSeconds * 1000));
+    if (workerRunning) await workerDelay(settings.checkIntervalSeconds * 1000);
   }
 }
 
@@ -100,12 +123,25 @@ app.get('/metrics', auth, (_req, res) => res.json({ ...db.stats(), protocols: db
 
 const server = app.listen(Number(process.env.PORT) || 8000, '0.0.0.0', () => console.log(`Proxy Pool API listening on ${server.address().port}`));
 workerRunning = true;
-worker();
+const workerPromise = worker().catch((error) => {
+  console.error(`[worker] fatal ${error.name || 'Error'}: ${error.message || error}`);
+});
 
-function shutdown(signal) {
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
   workerRunning = false;
-  server.close(() => { db.close(); console.log(`Shutdown after ${signal}`); process.exit(0); });
-  setTimeout(() => process.exit(1), 5000).unref();
+  if (workerTimer) clearTimeout(workerTimer);
+  wakeWorker?.();
+  const serverClosed = new Promise((resolve) => server.close(resolve));
+  let graceful = true;
+  await Promise.race([
+    Promise.allSettled([workerPromise, serverClosed]),
+    new Promise((resolve) => setTimeout(() => { graceful = false; resolve(); }, 10000)),
+  ]);
+  db.close();
+  console.log(`Shutdown after ${signal}${graceful ? '' : ' (deadline reached)'}`);
+  process.exit(graceful ? 0 : 1);
 }
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => { shutdown('SIGTERM'); });
+process.on('SIGINT', () => { shutdown('SIGINT'); });

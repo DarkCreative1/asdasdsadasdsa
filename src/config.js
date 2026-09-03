@@ -5,19 +5,35 @@ const number = (name, fallback) => {
   return Number.isFinite(value) ? value : fallback;
 };
 
+const boundedNumber = (name, fallback, min, max) => Math.min(max, Math.max(min, number(name, fallback)));
+const boundedInteger = (name, fallback, min, max) => Math.floor(boundedNumber(name, fallback, min, max));
+
+const defaultCheckTarget = 'https://www.google.com/generate_204';
+const configuredTargets = (process.env.CHECK_TARGETS || defaultCheckTarget)
+  .split(',')
+  .map((value) => value.trim())
+  .filter((value) => {
+    try {
+      return ['http:', 'https:'].includes(new URL(value).protocol);
+    } catch {
+      return false;
+    }
+  });
+
 export const settings = {
   databasePath: process.env.DATABASE_PATH || './data/proxies.db',
-  targetPoolSize: number('TARGET_POOL_SIZE', 25),
-  fetchIntervalSeconds: number('FETCH_INTERVAL_SECONDS', 300),
-  checkIntervalSeconds: number('CHECK_INTERVAL_SECONDS', 10),
-  checkConcurrency: Math.max(1, Math.floor(number('CHECK_CONCURRENCY', 100))),
-  sourceFetchConcurrency: Math.max(1, Math.floor(number('SOURCE_FETCH_CONCURRENCY', 6))),
-  checkTimeoutSeconds: number('CHECK_TIMEOUT_SECONDS', 2),
-  minSuccessRate: number('MIN_SUCCESS_RATE', 1),
-  minChecks: Math.max(1, Math.floor(number('MIN_CHECKS', 2))),
-  staleAfterSeconds: number('STALE_AFTER_SECONDS', 60),
-  maxCandidatesPerCycle: Math.max(0, Math.floor(number('MAX_CANDIDATES_PER_CYCLE', 0))),
+  targetPoolSize: boundedInteger('TARGET_POOL_SIZE', 25, 1, 100000),
+  fetchIntervalSeconds: boundedNumber('FETCH_INTERVAL_SECONDS', 300, 1, 86400),
+  checkIntervalSeconds: boundedNumber('CHECK_INTERVAL_SECONDS', 10, 1, 3600),
+  checkConcurrency: boundedInteger('CHECK_CONCURRENCY', 100, 1, 2000),
+  checkPersistBatchSize: boundedInteger('CHECK_PERSIST_BATCH_SIZE', 1000, 100, 10000),
+  sourceFetchConcurrency: boundedInteger('SOURCE_FETCH_CONCURRENCY', 6, 1, 100),
+  checkTimeoutSeconds: boundedNumber('CHECK_TIMEOUT_SECONDS', 2, 0.1, 120),
+  minSuccessRate: boundedNumber('MIN_SUCCESS_RATE', 1, 0, 1),
+  // Recent-result history is stored as a SQLite integer bit window.
+  minChecks: boundedInteger('MIN_CHECKS', 2, 1, 30),
+  staleAfterSeconds: boundedNumber('STALE_AFTER_SECONDS', 60, 1, 86400),
+  maxCandidatesPerCycle: boundedInteger('MAX_CANDIDATES_PER_CYCLE', 0, 0, 10000000),
   apiKey: process.env.API_KEY || '',
-  checkTargets: (process.env.CHECK_TARGETS || 'https://www.google.com/generate_204')
-    .split(',').map((value) => value.trim()).filter(Boolean),
+  checkTargets: configuredTargets.length ? configuredTargets : [defaultCheckTarget],
 };
