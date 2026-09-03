@@ -4,7 +4,7 @@ import { settings } from './config.js';
 import { SOURCES, fetchAllSources } from './sources.js';
 import { checkAll } from './checker.js';
 
-const db = new Database();
+const db = await Database.open();
 const app = express();
 let workerRunning = false;
 let refreshInProgress = false;

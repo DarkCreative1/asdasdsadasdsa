@@ -5,7 +5,7 @@ import { SOURCES, fetchAllSources } from '../src/sources.js';
 import { checkAll } from '../src/checker.js';
 
 const databasePath = process.env.DATABASE_PATH || 'data/actions.db';
-const db = new Database(databasePath);
+const db = await Database.open(databasePath);
 
 function flattenErrors(...results) {
   const errors = {};

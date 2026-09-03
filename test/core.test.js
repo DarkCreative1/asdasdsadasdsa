@@ -8,9 +8,9 @@ import { checkAll, checkOne } from '../src/checker.js';
 import { parseSourceText } from '../src/sources.js';
 import { settings } from '../src/config.js';
 
-function makeDb() {
+async function makeDb() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proxy-pool-test-'));
-  return { dir, db: new Database(path.join(dir, 'test.db')) };
+  return { dir, db: await Database.open(path.join(dir, 'test.db')) };
 }
 
 test('source parser normalizes supported protocols and rejects bad ports', () => {
@@ -20,7 +20,7 @@ test('source parser normalizes supported protocols and rejects bad ports', () =>
 });
 
 test('broken SOCKS proxies become dead without rejecting the batch', async () => {
-  const { dir, db } = makeDb();
+  const { dir, db } = await makeDb();
   const oldLimit = settings.maxCandidatesPerCycle;
   try {
     const values = new Set(['socks4://127.0.0.1:1', 'socks5://127.0.0.1:1', 'http://127.0.0.1:1']);
@@ -49,8 +49,8 @@ test('single proxy timeout is converted to a failed result', async () => {
   }
 });
 
-test('a proxy needs two successful checks before it is stable', () => {
-  const { dir, db } = makeDb();
+test('a proxy needs two successful checks before it is stable', async () => {
+  const { dir, db } = await makeDb();
   try {
     const proxy = 'http://127.0.0.1:8080';
     db.addMany(new Set([proxy]), 'test');

@@ -8,7 +8,7 @@ import { settings } from '../src/config.js';
 
 const limitArg = Number(process.argv[2] || 100);
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'proxy-pool-'));
-const db = new Database(path.join(tempDir, 'smoke.db'));
+const db = await Database.open(path.join(tempDir, 'smoke.db'));
 
 try {
   const fetched = await fetchAllSources();
