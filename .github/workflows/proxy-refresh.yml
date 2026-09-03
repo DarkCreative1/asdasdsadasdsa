@@ -17,15 +17,16 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: '3.12'
+          node-version: '24'
+          cache: npm
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: npm ci
       - name: Fetch, check and export snapshot
         env:
           DATABASE_PATH: data/actions.db
-        run: python scripts/refresh_snapshot.py
+        run: node scripts/refresh_snapshot.js
       - name: Commit snapshot
         run: |
           git config user.name github-actions[bot]

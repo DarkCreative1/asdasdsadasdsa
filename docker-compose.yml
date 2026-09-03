@@ -5,6 +5,7 @@ services:
     ports:
       - "8000:8000"
     environment:
+      NODE_ENV: production
       DATABASE_PATH: /data/proxies.db
       CHECK_CONCURRENCY: "100"
       CHECK_TIMEOUT_SECONDS: "2"
