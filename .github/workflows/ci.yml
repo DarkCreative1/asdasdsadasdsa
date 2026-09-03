@@ -15,7 +15,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Compile check
-        run: python -m compileall -q app run.py
+        run: python -m compileall -q app scripts tests run.py
       - name: Import check
         run: python -c "from app.main import app; print(app.title)"
       - name: Unit tests

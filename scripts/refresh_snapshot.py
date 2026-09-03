@@ -10,6 +10,10 @@ from app.db import Database
 from app.sources import SOURCES, fetch_source
 
 
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+
 async def main():
     db = Database(os.getenv("DATABASE_PATH", "data/actions.db"))
     results = await asyncio.gather(*(fetch_source(source) for source in SOURCES), return_exceptions=True)

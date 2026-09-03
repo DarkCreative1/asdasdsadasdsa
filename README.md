@@ -43,3 +43,9 @@ docker compose up -d --build
 ```
 
 API `http://SUNUCU_IP:8000/health` adresinden kontrol edilir. SQLite verisi kalıcı Docker volume içinde tutulur.
+
+Yerel, izole canlı kontrol testi:
+
+```bash
+python scripts/smoke_test.py --limit 100
+```

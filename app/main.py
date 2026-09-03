@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi.responses import PlainTextResponse
 from .config import settings
 from .db import Database
 from .sources import SOURCES, fetch_source
@@ -49,20 +50,36 @@ def auth(key: str | None):
         raise HTTPException(401, "Invalid API key")
 
 
+@app.get("/")
+async def index():
+    return {
+        "name": app.title,
+        "docs": "/docs",
+        "health": "/health",
+        "json": "/proxies",
+        "text": "/proxies.txt",
+        "protocols": ["http", "https", "socks4", "socks5"],
+    }
+
+
 @app.get("/health")
 async def health():
     stats = await db.stats()
-    stable = len(await db.healthy(settings.target_pool_size))
-    return {"ok": stable >= settings.target_pool_size, "stable": stable, **stats}
+    return {"ok": stats["healthy"] >= settings.target_pool_size, "stable": stats["healthy"], **stats}
 
 
 @app.get("/proxies")
 async def proxies(limit: int = Query(50, ge=1, le=500), x_api_key: str | None = Header(None)):
     auth(x_api_key)
     values = await db.healthy(limit)
-    if len(values) < settings.target_pool_size:
-        raise HTTPException(503, f"Only {len(values)} healthy proxies available")
     return {"count": len(values), "proxies": values}
+
+
+@app.get("/proxies.txt", response_class=PlainTextResponse)
+async def proxies_text(limit: int = Query(500, ge=1, le=500), x_api_key: str | None = Header(None)):
+    auth(x_api_key)
+    values = await db.healthy(limit)
+    return "\n".join(values) + ("\n" if values else "")
 
 
 @app.get("/proxies/{protocol}")

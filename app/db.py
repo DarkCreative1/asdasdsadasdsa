@@ -6,6 +6,12 @@ from datetime import datetime, timedelta, timezone
 from .config import settings
 
 
+UPDATE_CHECK_SQL = """UPDATE proxies SET alive=?, latency_ms=?, last_checked=?, check_count=check_count+1,
+    successes=successes+?, failures=failures+?,
+    success_rate=CAST(successes+? AS REAL)/(check_count+1),
+    last_success=CASE WHEN ? THEN ? ELSE last_success END WHERE proxy=?"""
+
+
 def now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -52,13 +58,20 @@ class Database:
         await asyncio.to_thread(work)
 
     async def update_check(self, proxy: str, alive: bool, latency: float | None):
+        await self.update_checks([(proxy, alive, latency)])
+
+    async def update_checks(self, checks: list[tuple[str, bool, float | None]]):
+        if not checks:
+            return
+
         def work():
+            checked_at = now()
+            rows = []
+            for proxy, alive, latency in checks:
+                flag = int(alive)
+                rows.append((flag, latency, checked_at, flag, int(not alive), flag, flag, checked_at, proxy))
             with self._connection() as c:
-                c.execute("""UPDATE proxies SET alive=?, latency_ms=?, last_checked=?, check_count=check_count+1,
-                    successes=successes+?, failures=failures+?,
-                    success_rate=CAST(successes+? AS REAL)/(successes+failures+1),
-                    last_success=CASE WHEN ? THEN ? ELSE last_success END WHERE proxy=?""",
-                    (int(alive), latency, now(), int(alive), int(not alive), int(alive), int(alive), now(), proxy))
+                c.executemany(UPDATE_CHECK_SQL, rows)
         await asyncio.to_thread(work)
 
     async def candidates(self, alive_only: bool = False, stale_only: bool = False):
@@ -73,7 +86,13 @@ class Database:
                     conditions.append("(last_checked IS NULL OR last_checked <= ?)")
                     params.append(cutoff)
                 where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-                query = f"SELECT proxy FROM proxies {where} ORDER BY alive DESC, success_rate DESC, latency_ms ASC NULLS LAST"
+                query = f"""SELECT proxy FROM proxies {where}
+                    ORDER BY alive DESC, success_rate DESC,
+                    CASE WHEN source LIKE 'monosans-%' THEN 0
+                         WHEN source LIKE 'proxifly-%' THEN 1
+                         WHEN source LIKE 'iplocate-%' THEN 2
+                         ELSE 3 END,
+                    latency_ms ASC NULLS LAST"""
                 return [r[0] for r in c.execute(query, params)]
         return await asyncio.to_thread(work)
 
@@ -96,11 +115,14 @@ class Database:
     async def stats(self):
         def work():
             with self._connection() as c:
-                total, alive, latency = c.execute("SELECT COUNT(*), COALESCE(SUM(alive),0), COALESCE(AVG(latency_ms),0) FROM proxies").fetchone()
+                total, alive, stable, latency = c.execute("""SELECT COUNT(*), COALESCE(SUM(alive),0),
+                    COALESCE(SUM(CASE WHEN alive=1 AND check_count>=? AND success_rate>=? THEN 1 ELSE 0 END),0),
+                    COALESCE(AVG(CASE WHEN alive=1 THEN latency_ms END),0) FROM proxies""",
+                    (settings.min_checks, settings.min_success_rate)).fetchone()
                 by_source = dict(c.execute("SELECT source, COUNT(*) FROM proxies GROUP BY source").fetchall())
-                return total, alive, latency, by_source
-        total, alive, latency, by_source = await asyncio.to_thread(work)
-        return {"total": total, "healthy": alive, "average_latency_ms": round(latency, 2), "by_source": by_source}
+                return total, alive, stable, latency, by_source
+        total, alive, stable, latency, by_source = await asyncio.to_thread(work)
+        return {"total": total, "healthy": stable, "alive_latest": alive, "average_latency_ms": round(latency, 2), "by_source": by_source}
 
     async def protocol_counts(self):
         def work():

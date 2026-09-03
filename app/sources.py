@@ -14,8 +14,6 @@ class Source:
 SOURCES = [
     Source("proxyscrape-socks5-fast", "https://api.proxyscrape.com/v4/free-proxy-list/get?request=displayproxies&protocol=socks5&timeout=1000&country=all&ssl=all&anonymity=all", "socks5"),
     Source("proxyscrape-http-fast", "https://api.proxyscrape.com/v4/free-proxy-list/get?request=displayproxies&protocol=http&timeout=1000&country=all&ssl=all&anonymity=all", "http"),
-    Source("proxy-list-download-socks5", "https://www.proxy-list.download/api/v1/get?type=socks5", "socks5"),
-    Source("proxy-list-download-http", "https://www.proxy-list.download/api/v1/get?type=http", "http"),
     Source("geonode-socks5", "https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc&protocols=socks5", "socks5"),
     # Independently maintained, frequently refreshed public snapshots.
     Source("proxifly-http", "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt", "http"),
@@ -26,7 +24,14 @@ SOURCES = [
     Source("iplocate-https", "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/https.txt", "https"),
     Source("iplocate-socks4", "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/socks4.txt", "socks4"),
     Source("iplocate-socks5", "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/socks5.txt", "socks5"),
-    Source("jetkai-all", "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies.txt", "http"),
+    # Broad coverage first; independently re-checked monosans entries are
+    # added last so duplicate records keep the higher-quality source label.
+    Source("thespeedx-http", "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt", "http"),
+    Source("thespeedx-socks4", "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks4.txt", "socks4"),
+    Source("thespeedx-socks5", "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks5.txt", "socks5"),
+    Source("monosans-http", "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt", "http"),
+    Source("monosans-socks4", "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt", "socks4"),
+    Source("monosans-socks5", "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt", "socks5"),
 ]
 
 
@@ -35,6 +40,10 @@ async def fetch_source(source: Source) -> set[str]:
         response = await client.get(source.url)
         response.raise_for_status()
         text = response.text
+    return parse_source_text(source, text)
+
+
+def parse_source_text(source: Source, text: str) -> set[str]:
     found = set()
     # GeoNode and similar APIs return JSON; plain-list sources return one host:port per line.
     try:
@@ -49,6 +58,10 @@ async def fetch_source(source: Source) -> set[str]:
         pass
     for line in text.splitlines():
         value = line.strip()
+        if "://" in value:
+            scheme, value = value.split("://", 1)
+            if scheme.lower() not in {"http", "https", "socks4", "socks5"}:
+                continue
         if value and re.fullmatch(r"[^:\s]+:\d{1,5}", value):
             host, port = value.rsplit(":", 1)
             if host and port.isdigit() and 1 <= int(port) <= 65535:
