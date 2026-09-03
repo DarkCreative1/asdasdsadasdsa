@@ -24,13 +24,21 @@ Bu komut kaynakları yerel SQLite veritabanına yazar, iki kontrol turu yapar ve
 
 VPS çalışma varsayılanları agresif tutulur: kaynak yenileme 60 saniye, tarama turu 10 saniye, bayatlık süresi 60 saniye ve 200 eşzamanlı kontrol. `CHECK_CONCURRENCY` değerini VPS kaynaklarına göre azaltabilirsiniz; çok yüksek değerler public kaynaklarda rate-limit ve ağ doygunluğu oluşturabilir.
 
-## Railway / Docker / VPS
+## Railway / VPS (saf Node.js)
 
-Railway için başlangıç komutu `npm start`, healthcheck yolu `/health` ve Node sürümü `24` olarak tanımlıdır. SQLite kalıcılığı için `/data` volume’u bağlayıp `DATABASE_PATH=/data/proxies.db` kullanın.
+Docker gerekli değildir. Node.js 24 veya daha yeni bir sürüm kurulu sistemde doğrudan çalışır:
 
 ```bash
-docker compose up -d --build
+git clone https://github.com/DarkCreative1/asdasdsadasdsa.git
+cd asdasdsadasdsa
+npm ci
+cp .env.example .env
+npm start
 ```
+
+Windows’ta `.env` kopyalama komutu `copy .env.example .env` şeklindedir. Railway başlangıç komutu `npm start`, healthcheck yolu `/health` ve Node sürümü `24` olarak tanımlıdır. VPS’te SQLite kalıcılığı için `DATABASE_PATH` değerini kalıcı bir klasöre yönlendirin.
+
+İsteğe bağlı olarak `npm start` komutunu systemd, PM2 veya Windows Görev Zamanlayıcı ile servis olarak çalıştırabilirsiniz; uygulamanın çalışması için Docker gerekmez.
 
 VPS’te yalnızca izinli ve yasal trafik için kullanın. Public proxy listeleri hızlı değişir; snapshot dosyası anlık garanti vermez.
 
