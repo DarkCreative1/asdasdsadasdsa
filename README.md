@@ -22,6 +22,8 @@ node scripts/refresh_snapshot.js
 
 Bu komut kaynakları yerel SQLite veritabanına yazar, iki kontrol turu yapar ve `data/proxies.txt` ile `data/proxies.json` dosyalarını günceller. `MAX_CANDIDATES_PER_CYCLE=0` tüm adayları test eder. Varsayılan kontrol timeout’u 2 saniyedir.
 
+VPS çalışma varsayılanları agresif tutulur: kaynak yenileme 60 saniye, tarama turu 10 saniye, bayatlık süresi 60 saniye ve 200 eşzamanlı kontrol. `CHECK_CONCURRENCY` değerini VPS kaynaklarına göre azaltabilirsiniz; çok yüksek değerler public kaynaklarda rate-limit ve ağ doygunluğu oluşturabilir.
+
 ## Railway / Docker / VPS
 
 Railway için başlangıç komutu `npm start`, healthcheck yolu `/health` ve Node sürümü `24` olarak tanımlıdır. SQLite kalıcılığı için `/data` volume’u bağlayıp `DATABASE_PATH=/data/proxies.db` kullanın.
