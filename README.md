@@ -31,3 +31,15 @@ Protokole göre listeleme: `/proxies/http`, `/proxies/https`, `/proxies/socks4`,
 Durum ve kaynak metrikleri: `GET /metrics`. Servis her kontrol turunda başarısız proxyleri puanlar, beş veya daha fazla ardışık başarısızlıkta düşük başarı oranlı kayıtları temizler ve havuzu yeniden doldurur. `MAX_CANDIDATES_PER_CYCLE` ile kaynakların aşırı büyümesi engellenir.
 
 `/proxies` en az 50 sağlıklı proxy yoksa 503 döndürür. Public proxyler sık sık kapanabildiği için 50 sayısı garanti değil; servis havuzu sürekli yenileyip kontrol eder. Üretimde yalnızca izinli ve yasal trafik için kullanın.
+
+## VPS / Docker
+
+Ubuntu VPS üzerinde sürekli çalıştırmak için:
+
+```bash
+git clone https://github.com/DarkCreative1/asdasdsadasdsa.git
+cd asdasdsadasdsa
+docker compose up -d --build
+```
+
+API `http://SUNUCU_IP:8000/health` adresinden kontrol edilir. SQLite verisi kalıcı Docker volume içinde tutulur.

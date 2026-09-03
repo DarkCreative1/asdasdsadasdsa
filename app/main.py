@@ -28,7 +28,7 @@ async def worker():
         if now - last_fetch >= settings.fetch_interval_seconds:
             await fetch_all()
             last_fetch = now
-        await check_all(db)
+        await check_all(db, stale_only=True)
         await db.prune()
         await asyncio.sleep(settings.check_interval_seconds)
 
@@ -52,7 +52,8 @@ def auth(key: str | None):
 @app.get("/health")
 async def health():
     stats = await db.stats()
-    return {"ok": stats["healthy"] >= settings.target_pool_size, **stats}
+    stable = len(await db.healthy(settings.target_pool_size))
+    return {"ok": stable >= settings.target_pool_size, "stable": stable, **stats}
 
 
 @app.get("/proxies")

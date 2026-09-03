@@ -1,0 +1,15 @@
+services:
+  proxy-pool:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_PATH: /data/proxies.db
+      CHECK_CONCURRENCY: "100"
+      CHECK_TIMEOUT_SECONDS: "2"
+    volumes:
+      - proxy-data:/data
+
+volumes:
+  proxy-data:

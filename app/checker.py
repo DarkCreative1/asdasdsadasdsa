@@ -1,5 +1,4 @@
 import asyncio
-import random
 import time
 import httpx
 import aiohttp
@@ -18,12 +17,12 @@ async def check_one(proxy: str, db: Database, semaphore: asyncio.Semaphore):
             if proxy.startswith(("socks4://", "socks5://")):
                 connector = ProxyConnector.from_url(proxy)
                 async with aiohttp.ClientSession(connector=connector) as client:
-                    for target in random.sample(CHECK_URLS, k=len(CHECK_URLS)):
+                    for target in CHECK_URLS:
                         async with client.get(target, timeout=settings.check_timeout_seconds, allow_redirects=False) as response:
                             results.append(response.status in (200, 204, 301, 302))
             else:
                 async with httpx.AsyncClient(proxy=proxy, timeout=settings.check_timeout_seconds, follow_redirects=False) as client:
-                    for target in random.sample(CHECK_URLS, k=len(CHECK_URLS)):
+                    for target in CHECK_URLS:
                         response = await client.get(target, headers={"User-Agent": "proxy-pool-health-check/1.0"})
                         results.append(response.status_code in (200, 204, 301, 302))
             latency = round((time.perf_counter() - started) * 1000, 2)
@@ -49,10 +48,10 @@ async def check_one(proxy: str, db: Database, semaphore: asyncio.Semaphore):
             return {"alive": False, "error": type(exc).__name__}
 
 
-async def check_all(db: Database, alive_only: bool = False):
+async def check_all(db: Database, alive_only: bool = False, stale_only: bool = False):
     # Checking in bounded batches prevents thousands of public entries from
     # creating an unbounded number of tasks and file descriptors.
-    proxies = await db.candidates(alive_only=alive_only)
+    proxies = await db.candidates(alive_only=alive_only, stale_only=stale_only)
     if settings.max_candidates_per_cycle > 0:
         proxies = proxies[: settings.max_candidates_per_cycle]
     semaphore = asyncio.Semaphore(settings.check_concurrency)

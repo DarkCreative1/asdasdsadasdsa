@@ -1,0 +1,10 @@
+.git
+.github
+.venv
+__pycache__
+*.pyc
+*.db
+*.sqlite
+*.zip
+data/proxies.json
+data/proxies.txt
