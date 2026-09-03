@@ -18,6 +18,10 @@ API: `http://localhost:8000/health` ve `http://localhost:8000/proxies?limit=50`
 
 Manuel kaynak yenileme: `POST /refresh` (API key ayarlıysa `X-API-Key` header gerekir).
 
+## Railway deploy
+
+Repo Railway'e bağlandığında `railway.toml` ve `Procfile` FastAPI başlatma komutunu otomatik olarak sağlar. Railway servis ayarlarında `PORT` değişkenini Railway'in varsayılan değeriyle bırakın. SQLite verisini deploy'lar arasında korumak için servise bir Volume ekleyip `/data` konumuna bağlayın ve `DATABASE_PATH=/data/proxies.db` değişkenini tanımlayın. Volume olmadan uygulama çalışır, ancak veritabanı yeniden deploy/restart sonrasında sıfırlanabilir.
+
 Protokole göre listeleme: `/proxies/http`, `/proxies/https`, `/proxies/socks4`, `/proxies/socks5`.
 
 ## GitHub Actions
