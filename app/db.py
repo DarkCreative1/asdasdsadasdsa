@@ -75,6 +75,15 @@ class Database:
         total, alive, latency, by_source = await asyncio.to_thread(work)
         return {"total": total, "healthy": alive, "average_latency_ms": round(latency, 2), "by_source": by_source}
 
+    async def protocol_counts(self):
+        def work():
+            with sqlite3.connect(self.path) as c:
+                rows = c.execute("""SELECT protocol, COUNT(*) FROM proxies
+                    WHERE alive=1 AND check_count>=? AND success_rate>=?
+                    GROUP BY protocol ORDER BY protocol""", (settings.min_checks, settings.min_success_rate)).fetchall()
+                return {protocol.upper(): count for protocol, count in rows}
+        return await asyncio.to_thread(work)
+
     async def prune(self):
         """Remove proxies that have not succeeded recently or have repeatedly failed."""
         def work():

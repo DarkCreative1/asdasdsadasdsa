@@ -11,7 +11,7 @@ permissions:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -20,12 +20,14 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Fetch, check and export snapshot
+        env:
+          DATABASE_PATH: data/actions.db
         run: python scripts/refresh_snapshot.py
       - name: Commit snapshot
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add data/proxies.json data/proxies.txt
-          git diff --cached --quiet || git commit -m "chore: refresh proxy snapshot"
+          git diff --cached --quiet || git commit -m "fix: handle broken proxies without stopping github actions"
           git push
 
