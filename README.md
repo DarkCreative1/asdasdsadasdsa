@@ -9,6 +9,8 @@ npm install
 copy .env.example .env       # Windows
 # cp .env.example .env       # Linux/macOS
 npm start
+# Panel doğrudan komut istiyorsa:
+node /home/container/index.js
 ```
 
 API: `http://localhost:8000/health`, `http://localhost:8000/proxies?limit=50` ve `http://localhost:8000/proxies.txt`.
