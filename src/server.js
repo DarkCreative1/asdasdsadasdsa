@@ -19,15 +19,19 @@ function auth(req, res, next) {
 async function fetchAll() {
   const results = await fetchAllSources();
   const summary = {};
+  let total = 0;
   for (const { source, result } of results) {
     if (result.status === 'fulfilled') {
       db.addMany(result.value, source[0]);
       summary[source[0]] = result.value.size;
+      total += result.value.size;
     } else {
       summary[source[0]] = 0;
+      console.error(`[source] ${source[0]} failed: ${result.reason?.name || 'Error'}`);
     }
   }
   lastRefresh = new Date().toISOString();
+  console.log(`[worker] sources=${SOURCES.length} candidates=${total}`);
   return summary;
 }
 
@@ -51,13 +55,18 @@ async function worker() {
   while (workerRunning) {
     try {
       const now = Date.now();
+      let fetchedThisCycle = false;
       if (now - lastFetchAt >= settings.fetchIntervalSeconds * 1000) {
         await fetchAll();
         lastFetchAt = Date.now();
+        fetchedThisCycle = true;
       }
-      await checkAll(db, { staleOnly: true });
+      const first = await checkAll(db, { staleOnly: true });
+      const second = fetchedThisCycle ? await checkAll(db, { aliveOnly: true }) : null;
       db.prune();
       lastCheck = new Date().toISOString();
+      const stats = db.stats();
+      console.log(`[worker] tested=${first.tested + (second?.tested || 0)} stable=${stats.stable} failed=${first.failed + (second?.failed || 0)}`);
     } catch (error) {
       console.error(`[worker] ${error.name || 'Error'}: ${error.message || error}`);
     }
