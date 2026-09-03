@@ -27,7 +27,8 @@ async function fetchAll() {
       total += result.value.size;
     } else {
       summary[source[0]] = 0;
-      console.error(`[source] ${source[0]} failed: ${result.reason?.name || 'Error'}`);
+      const reason = result.reason;
+      console.error(`[source] ${source[0]} failed: ${reason?.code || reason?.response?.status || reason?.name || 'Error'}`);
     }
   }
   lastRefresh = new Date().toISOString();

@@ -8,9 +8,10 @@ const number = (name, fallback) => {
 export const settings = {
   databasePath: process.env.DATABASE_PATH || './data/proxies.db',
   targetPoolSize: number('TARGET_POOL_SIZE', 25),
-  fetchIntervalSeconds: number('FETCH_INTERVAL_SECONDS', 60),
+  fetchIntervalSeconds: number('FETCH_INTERVAL_SECONDS', 300),
   checkIntervalSeconds: number('CHECK_INTERVAL_SECONDS', 10),
-  checkConcurrency: Math.max(1, Math.floor(number('CHECK_CONCURRENCY', 200))),
+  checkConcurrency: Math.max(1, Math.floor(number('CHECK_CONCURRENCY', 100))),
+  sourceFetchConcurrency: Math.max(1, Math.floor(number('SOURCE_FETCH_CONCURRENCY', 6))),
   checkTimeoutSeconds: number('CHECK_TIMEOUT_SECONDS', 2),
   minSuccessRate: number('MIN_SUCCESS_RATE', 1),
   minChecks: Math.max(1, Math.floor(number('MIN_CHECKS', 2))),

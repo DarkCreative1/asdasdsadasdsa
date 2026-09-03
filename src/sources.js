@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { settings } from './config.js';
 
 export const SOURCES = [
   ['proxyscrape-socks5-fast', 'https://api.proxyscrape.com/v4/free-proxy-list/get?request=displayproxies&protocol=socks5&timeout=1000&country=all&ssl=all&anonymity=all', 'socks5'],
@@ -44,11 +45,33 @@ export function parseSourceText(source, text) {
 }
 
 export async function fetchSource(source, client = axios) {
-  const response = await client.get(source[1], { timeout: 15000, maxContentLength: 10 * 1024 * 1024, responseType: 'text' });
-  return parseSourceText(source, response.data);
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await client.get(source[1], { timeout: 15000, maxContentLength: 10 * 1024 * 1024, responseType: 'text' });
+      return parseSourceText(source, response.data);
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+  throw lastError;
 }
 
 export async function fetchAllSources() {
-  const results = await Promise.allSettled(SOURCES.map((source) => fetchSource(source)));
+  const results = new Array(SOURCES.length);
+  let next = 0;
+  const worker = async () => {
+    while (true) {
+      const index = next++;
+      if (index >= SOURCES.length) return;
+      try {
+        results[index] = { status: 'fulfilled', value: await fetchSource(SOURCES[index]) };
+      } catch (reason) {
+        results[index] = { status: 'rejected', reason };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(settings.sourceFetchConcurrency, SOURCES.length) }, worker));
   return results.map((result, index) => ({ source: SOURCES[index], result }));
 }

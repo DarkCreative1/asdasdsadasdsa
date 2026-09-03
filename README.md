@@ -24,7 +24,7 @@ node scripts/refresh_snapshot.js
 
 Bu komut kaynakları yerel SQLite veritabanına yazar, iki kontrol turu yapar ve `data/proxies.txt` ile `data/proxies.json` dosyalarını günceller. `MAX_CANDIDATES_PER_CYCLE=0` tüm adayları test eder. Varsayılan kontrol timeout’u 2 saniyedir.
 
-VPS çalışma varsayılanları agresif tutulur: kaynak yenileme 60 saniye, tarama turu 10 saniye, bayatlık süresi 60 saniye ve 200 eşzamanlı kontrol. `CHECK_CONCURRENCY` değerini VPS kaynaklarına göre azaltabilirsiniz; çok yüksek değerler public kaynaklarda rate-limit ve ağ doygunluğu oluşturabilir.
+VPS çalışma varsayılanları dengeli tutulur: kaynak yenileme 300 saniye, tarama turu 10 saniye, bayatlık süresi 60 saniye ve 100 eşzamanlı proxy kontrolü. Proxy havuzu her 10 saniyede yenilenirken kaynak listelerini her dakika tekrar çekmek public kaynaklarda rate-limit ve VPS bağlantı havuzu tükenmesine yol açabilir. `CHECK_CONCURRENCY` ve `SOURCE_FETCH_CONCURRENCY` değerlerini VPS kaynaklarına göre ayarlayabilirsiniz.
 
 ## Railway / VPS (saf Node.js)
 
