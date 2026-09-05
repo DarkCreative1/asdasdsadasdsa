@@ -46,6 +46,26 @@ VPS’te yalnızca izinli ve yasal trafik için kullanın. Public proxy listeler
 
 ## Testler
 
+Uzun çalışmada `ENOBUFS` / `EMFILE` gibi hatalar sunucunun ağ kaynaklarının
+tükendiğini gösterir. `socket-lifecycle-v2` sürümü timeout iptalini hem HTTP
+isteğine hem proxy bağlantısına iletir; SOCKS el sıkışmasına da aynı süre sınırı
+uygular. Kaynak tükenmesi algılanırsa yeni taramalar 30–300 saniye duraklatılır,
+eşzamanlılık azaltılır ve başarılı kontroller geldikçe yavaşça yükseltilir.
+Bu sırada yerel kaynak hataları proxy başarısızlığı olarak kaydedilmez.
+`STALE_AFTER_SECONDS` süresini geçen sonuçlar API'de stabil gösterilmez.
+
+`/health` içindeki `runtime` alanı sürümü, uptime, RSS belleği, aktif Node kaynak
+sayılarını, cooldown durumunu ve son turun hata dağılımını gösterir. Worker
+logları aynı tanı bilgileriyle zaman damgası içerir. Windows'ta işletim sistemi
+bağlantı durumlarını görmek için PowerShell'de `Get-NetTCPConnection |
+Group-Object State | Select-Object Count,Name` kullanılabilir.
+
+VDS güncellemesi: uygulamayı Ctrl+C ile kapatın, `.env` ve `data/proxies.db`
+dosyalarını koruyarak güncel proje dosyalarını aktarın, `npm install` ve
+`node index.js` çalıştırın. Git ile kurulduysa dosya aktarımı yerine
+`git pull --ff-only origin main` kullanılabilir. Yeni kodun çalıştığını
+`/health` → `runtime.version = socket-lifecycle-v2` alanından doğrulayın.
+
 ```bash
 npm run check
 npm test
@@ -53,6 +73,13 @@ node scripts/smoke_test.js 100
 ```
 
 Unit testleri batch izolasyonunu, bozuk SOCKS proxylerini, timeout davranışını, kaynak ayrıştırmayı, iki başarılı kontrol şartını ve geçici hatadan sonra havuza geri dönüşü doğrular.
+
+TCP testleri, bağlantıyı kabul edip el sıkışmasına cevap vermeyen yerel
+sunucularda her turdan sonra açık soket sayısının sıfıra döndüğünü doğrular.
+PowerShell'de daha uzun tekrar testi: `$env:NETWORK_TEST_WAVES=100` ardından
+`node --test test/network.test.js`. Bu gerçek TCP bağlantı testi, 24/90 saatlik
+kesintisiz VDS çalışmasının yerine geçmez; eski 5.400 sonuç testi yalnızca
+veritabanı sayaçlarını sınar.
 
 ## GitHub Actions
 

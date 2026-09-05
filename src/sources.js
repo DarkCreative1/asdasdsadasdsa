@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { settings } from './config.js';
+import { errorCode, isResourceError, networkGuard } from './network.js';
 
 export const SOURCES = [
   ['proxyscrape-socks5-fast', 'https://api.proxyscrape.com/v4/free-proxy-list/get?request=displayproxies&protocol=socks5&timeout=1000&country=all&ssl=all&anonymity=all', 'socks5'],
@@ -47,12 +48,21 @@ export function parseSourceText(source, text) {
 export async function fetchSource(source, client = axios) {
   let lastError;
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (networkGuard.paused()) throw Object.assign(new Error('Local network cooldown'), { code: 'NETWORK_COOLDOWN' });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
     try {
-      const response = await client.get(source[1], { timeout: 15000, maxContentLength: 10 * 1024 * 1024, responseType: 'text' });
+      const response = await client.get(source[1], { signal: controller.signal, timeout: 15000, maxContentLength: 10 * 1024 * 1024, responseType: 'text' });
       return parseSourceText(source, response.data);
     } catch (error) {
       lastError = error;
+      const code = errorCode(error);
+      networkGuard.fail(code, settings.checkConcurrency);
+      if (isResourceError(code)) throw error;
       if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 500));
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
     }
   }
   throw lastError;

@@ -118,14 +118,14 @@ export class Database {
     const checkedAt = new Date().toISOString();
     this.db.run('BEGIN TRANSACTION');
     try {
-      for (const [proxy, alive, latency] of checks) {
+      for (const [proxy, alive, latency, completedAt = checkedAt] of checks) {
         const flag = alive ? 1 : 0;
         const windowSize = settings.minChecks;
         const windowMask = (2 ** windowSize) - 1;
         statement.run([
-          flag, latency, checkedAt, flag, alive ? 0 : 1, flag,
+          flag, latency, completedAt, flag, alive ? 0 : 1, flag,
           windowSize, flag, flag, windowSize, windowSize, flag, windowMask,
-          flag, checkedAt, proxy,
+          flag, completedAt, proxy,
         ]);
         statement.reset();
       }
@@ -159,22 +159,23 @@ export class Database {
 
   healthy(limit = 500) {
     return this.queryAll(`SELECT proxy FROM proxies WHERE alive=1 AND recent_checks>=?
-      AND CAST(recent_successes AS REAL)/recent_checks>=? ORDER BY latency_ms ASC LIMIT ?`, [settings.minChecks, settings.minSuccessRate, limit])
+      AND CAST(recent_successes AS REAL)/recent_checks>=? AND last_checked>=?
+      ORDER BY latency_ms ASC LIMIT ?`, [settings.minChecks, settings.minSuccessRate, this.freshnessCutoff(), limit])
       .map((row) => row.proxy);
   }
 
   healthyProtocol(protocol, limit = 500) {
     return this.queryAll(`SELECT proxy FROM proxies WHERE protocol=? AND alive=1
       AND recent_checks>=? AND CAST(recent_successes AS REAL)/recent_checks>=?
-      ORDER BY latency_ms ASC LIMIT ?`, [protocol, settings.minChecks, settings.minSuccessRate, limit])
+      AND last_checked>=? ORDER BY latency_ms ASC LIMIT ?`, [protocol, settings.minChecks, settings.minSuccessRate, this.freshnessCutoff(), limit])
       .map((row) => row.proxy);
   }
 
   stats() {
     const row = this.queryOne(`SELECT COUNT(*) AS total, COALESCE(SUM(alive),0) AS alive,
       COALESCE(SUM(CASE WHEN alive=1 AND recent_checks>=?
-        AND CAST(recent_successes AS REAL)/recent_checks>=? THEN 1 ELSE 0 END),0) AS stable,
-      COALESCE(AVG(CASE WHEN alive=1 THEN latency_ms END),0) AS latency FROM proxies`, [settings.minChecks, settings.minSuccessRate]);
+        AND CAST(recent_successes AS REAL)/recent_checks>=? AND last_checked>=? THEN 1 ELSE 0 END),0) AS stable,
+      COALESCE(AVG(CASE WHEN alive=1 THEN latency_ms END),0) AS latency FROM proxies`, [settings.minChecks, settings.minSuccessRate, this.freshnessCutoff()]);
     const bySource = Object.fromEntries(this.queryAll('SELECT source, COUNT(*) AS count FROM proxies GROUP BY source').map((item) => [item.source, item.count]));
     return { total: row.total, healthy: row.stable, stable: row.stable, alive_latest: row.alive, average_latency_ms: Math.round(row.latency * 100) / 100, by_source: bySource };
   }
@@ -182,8 +183,13 @@ export class Database {
   protocolCounts() {
     return Object.fromEntries(this.queryAll(`SELECT UPPER(protocol) AS protocol, COUNT(*) AS count
       FROM proxies WHERE alive=1 AND recent_checks>=?
-        AND CAST(recent_successes AS REAL)/recent_checks>=? GROUP BY protocol`, [settings.minChecks, settings.minSuccessRate])
+        AND CAST(recent_successes AS REAL)/recent_checks>=? AND last_checked>=?
+        GROUP BY protocol`, [settings.minChecks, settings.minSuccessRate, this.freshnessCutoff()])
       .map((item) => [item.protocol, item.count]));
+  }
+
+  freshnessCutoff() {
+    return new Date(Date.now() - settings.staleAfterSeconds * 1000).toISOString();
   }
 
   prune() {
