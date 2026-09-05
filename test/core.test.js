@@ -148,7 +148,7 @@ test('an existing database is migrated and can recover normally', async () => {
   }
 });
 
-test('a 90-hour equivalent history does not permanently poison a proxy', async () => {
+test('5400 recorded outcomes with intermittent failures do not permanently poison a proxy', async () => {
   const { dir, db } = await makeDb();
   try {
     const proxy = 'http://127.0.0.1:8084';
@@ -168,6 +168,33 @@ test('a 90-hour equivalent history does not permanently poison a proxy', async (
     assert.deepEqual(db.healthy(), [proxy]);
   } finally {
     db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('changing MIN_CHECKS across restarts cannot reuse incompatible window counters', async () => {
+  const previous = settings.minChecks;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proxy-window-'));
+  const dbPath = path.join(dir, 'test.db');
+  let db;
+  try {
+    settings.minChecks = 3;
+    db = await Database.open(dbPath);
+    const proxy = 'http://127.0.0.1:9876';
+    db.addMany(new Set([proxy]), 'test');
+    db.updateChecks([[proxy, true, 1], [proxy, true, 1], [proxy, true, 1]]);
+    assert.deepEqual(db.healthy(), [proxy]);
+    db.close(); db = null;
+    settings.minChecks = 2;
+    db = await Database.open(dbPath);
+    assert.deepEqual(db.healthy(), []);
+    db.updateCheck(proxy, true, 1);
+    assert.deepEqual(db.healthy(), []);
+    db.updateCheck(proxy, true, 1);
+    assert.deepEqual(db.healthy(), [proxy]);
+    assert.equal(db.queryOne('SELECT successes FROM proxies WHERE proxy=?', [proxy]).successes, 5);
+  } finally {
+    db?.close(); settings.minChecks = previous;
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

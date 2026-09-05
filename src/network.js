@@ -12,7 +12,22 @@ export function errorCode(error) {
       new RegExp(`\\b${code}\\b`).test(current.message || ''));
     if (local) return local;
   }
-  return fallback || error?.name || 'Error';
+  if (fallback) return fallback;
+  const message = String(error?.message || '');
+  const socketCode = message.match(/\b(E[A-Z0-9_]{3,})\b/);
+  if (socketCode) return socketCode[1];
+  if (/timed?\s*out|timeout/i.test(message)) return 'TimeoutError';
+  if (/ended before receiving CONNECT/i.test(message)) return 'CONNECT_CLOSED';
+  if (/socket closed/i.test(message)) return 'PROXY_SOCKET_CLOSED';
+  if (/socks.*reject|no accepted auth/i.test(message)) return 'SOCKS_REJECTED';
+  if (/invalid.*socks|socks.*invalid/i.test(message)) return 'SOCKS_PROTOCOL_ERROR';
+  return error?.name || 'Error';
+}
+
+export function errorDetail(error) {
+  return String(error?.message || error || 'Unknown failure')
+    .replace(/[a-z][a-z0-9+.-]*:\/\/[^\s]+/gi, '[url]')
+    .replace(/[\r\n\t]/g, ' ').slice(0, 160);
 }
 
 export function isResourceError(code) {

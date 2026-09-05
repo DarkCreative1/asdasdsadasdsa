@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
+import http from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 import { checkOne } from '../src/checker.js';
 import { settings } from '../src/config.js';
@@ -59,6 +60,53 @@ test('a proxy that accepts CONNECT but stalls TLS is also closed on timeout', { 
     assert.equal(sockets.size, 0);
   } finally {
     Object.assign(settings, saved);
+    for (const socket of sockets) socket.destroy();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('HTTP rejection is classified, and the next successful response still passes', async () => {
+  let status = 503;
+  const server = http.createServer((_req, res) => { res.writeHead(status); res.end(); });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const saved = { ...settings };
+  settings.checkTargets = ['http://127.0.0.1/generate_204'];
+  try {
+    const proxy = `http://127.0.0.1:${server.address().port}`;
+    const failed = await checkOne(proxy);
+    assert.equal(failed.error, 'HTTP_STATUS_503');
+    assert.match(failed.detail, /received HTTP 503/);
+    status = 204;
+    assert.equal((await checkOne(proxy)).alive, true);
+  } finally {
+    Object.assign(settings, saved);
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('external cancellation closes a pending CONNECT and is not a dead-proxy verdict', async () => {
+  const sockets = new Set();
+  const server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.on('data', () => {});
+    socket.on('error', () => {});
+    socket.on('close', () => sockets.delete(socket));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const saved = { ...settings };
+  settings.checkTargets = ['https://127.0.0.1/generate_204'];
+  const controller = new AbortController();
+  try {
+    const pending = checkOne(`http://127.0.0.1:${server.address().port}`, { signal: controller.signal });
+    for (let i = 0; i < 50 && sockets.size === 0; i++) await delay(10);
+    assert.equal(sockets.size, 1);
+    controller.abort();
+    assert.equal((await pending).cancelled, true);
+    for (let i = 0; i < 50 && sockets.size; i++) await delay(10);
+    assert.equal(sockets.size, 0);
+  } finally {
+    controller.abort(); Object.assign(settings, saved);
     for (const socket of sockets) socket.destroy();
     await new Promise((resolve) => server.close(resolve));
   }

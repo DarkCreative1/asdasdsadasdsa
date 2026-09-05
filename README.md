@@ -24,7 +24,26 @@ node scripts/refresh_snapshot.js
 
 Bu komut kaynakları yerel SQLite veritabanına yazar, iki kontrol turu yapar ve `data/proxies.txt` ile `data/proxies.json` dosyalarını günceller. `MAX_CANDIDATES_PER_CYCLE=0` tüm adayları test eder. Varsayılan kontrol timeout’u 2 saniyedir.
 
-VPS çalışma varsayılanları dengeli tutulur: kaynak yenileme 300 saniye, tarama turu 10 saniye, bayatlık süresi 60 saniye ve 100 eşzamanlı proxy kontrolü. Uzun taramalar `CHECK_PERSIST_BATCH_SIZE` kadar parçalar halinde kaydedilir ve veritabanı dosyası atomik olarak değiştirilir; ani yeniden başlatma sırasında yarım SQLite dosyası bırakılmaz. Proxy havuzu her 10 saniyede yenilenirken kaynak listelerini her dakika tekrar çekmek public kaynaklarda rate-limit ve VPS bağlantı havuzu tükenmesine yol açabilir. `CHECK_CONCURRENCY` ve `SOURCE_FETCH_CONCURRENCY` değerlerini VPS kaynaklarına göre ayarlayabilirsiniz.
+VPS varsayılanları: kaynak yenileme 300 saniye, çalışan proxyleri kontrol eden
+döngü 10 saniye, bayatlık süresi 60 saniye ve toplam 100 eşzamanlı proxy kontrolü.
+Kaynak indirme, aday keşfi ve canlı havuz kontrolleri bağımsız çalışır. Canlı
+kontroller ortak bağlantı kuyruğunda önceliklidir; keşif turunun bitmesini
+beklemez. `CHECK_CONCURRENCY` iki kontrol döngüsünün toplam sınırıdır; kaynak
+istekleri ayrıca `SOURCE_FETCH_CONCURRENCY` sınırını kullanır. Gerçek tekrar
+süresi havuz büyüklüğü ve ağ gecikmesine bağlıdır. Bayat sonuçlar yayınlanmaz.
+
+Her tamamlanan kontrol API'nin kullandığı veritabanına hemen işlenir. Servis
+değişiklikleri saniyede bir atomik dosya değişimiyle diske kaydeder; zorla
+kapanmada son kaydedilmemiş sonuçlar kaybolabilir. Snapshot scriptleri
+`CHECK_PERSIST_BATCH_SIZE` kontrol başına ve tur sonunda kaydeder.
+`MAX_CANDIDATES_PER_CYCLE` yalnızca keşfi sınırlar; canlı havuz kontrollerini
+kısıtlamaz. `0`, bütün adayların taranmasıdır.
+
+`POST /refresh` kaynak indirmesini tamamlayıp **202** döner; taramalar arka
+planda devam eder. Aynı anda gelen yenilemeler tek kaynak isteğini paylaşır.
+İlerleme `/health` veya `/metrics` → `workers.cycles.live` ve
+`workers.cycles.discovery` üzerinden izlenebilir. `last_check` son canlı tur
+zamanıdır; listedeki her proxynin o anda kontrol edildiği anlamına gelmez.
 
 ## Railway / VPS (saf Node.js)
 
@@ -47,7 +66,7 @@ VPS’te yalnızca izinli ve yasal trafik için kullanın. Public proxy listeler
 ## Testler
 
 Uzun çalışmada `ENOBUFS` / `EMFILE` gibi hatalar sunucunun ağ kaynaklarının
-tükendiğini gösterir. `socket-lifecycle-v2` sürümü timeout iptalini hem HTTP
+tükendiğini gösterir. `live-scheduler-v3` sürümü timeout iptalini hem HTTP
 isteğine hem proxy bağlantısına iletir; SOCKS el sıkışmasına da aynı süre sınırı
 uygular. Kaynak tükenmesi algılanırsa yeni taramalar 30–300 saniye duraklatılır,
 eşzamanlılık azaltılır ve başarılı kontroller geldikçe yavaşça yükseltilir.
@@ -55,8 +74,10 @@ Bu sırada yerel kaynak hataları proxy başarısızlığı olarak kaydedilmez.
 `STALE_AFTER_SECONDS` süresini geçen sonuçlar API'de stabil gösterilmez.
 
 `/health` içindeki `runtime` alanı sürümü, uptime, RSS belleği, aktif Node kaynak
-sayılarını, cooldown durumunu ve son turun hata dağılımını gösterir. Worker
-logları aynı tanı bilgileriyle zaman damgası içerir. Windows'ta işletim sistemi
+sayılarını, cooldown durumunu ve ortak kuyruğu gösterir. `workers.cycles`
+kontrol sayıları, tur süresi, hata türleri ve sınırlı hata örneklerini içerir.
+`[worker:live]` ve `[worker:discovery]` logları ayrı zaman damgaları içerir.
+204 dışındaki yanıtlar `HTTP_STATUS_...` olarak kaydedilir. Windows'ta işletim sistemi
 bağlantı durumlarını görmek için PowerShell'de `Get-NetTCPConnection |
 Group-Object State | Select-Object Count,Name` kullanılabilir.
 
@@ -64,7 +85,10 @@ VDS güncellemesi: uygulamayı Ctrl+C ile kapatın, `.env` ve `data/proxies.db`
 dosyalarını koruyarak güncel proje dosyalarını aktarın, `npm install` ve
 `node index.js` çalıştırın. Git ile kurulduysa dosya aktarımı yerine
 `git pull --ff-only origin main` kullanılabilir. Yeni kodun çalıştığını
-`/health` → `runtime.version = socket-lifecycle-v2` alanından doğrulayın.
+`/health` → `runtime.version = live-scheduler-v3` alanından doğrulayın.
+Eski veritabanı otomatik güncellenir; ilk geçişte ve `MIN_CHECKS` değişince
+stabilite penceresi yeni kontrollerle doldurulur. Toplam geçmiş istatistikleri
+korunur. Tek veritabanını aynı anda yalnızca bir Node süreci kullanmalıdır.
 
 ```bash
 npm run check

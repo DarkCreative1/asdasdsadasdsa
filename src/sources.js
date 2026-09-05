@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { setTimeout as delay } from 'node:timers/promises';
 import { settings } from './config.js';
 import { errorCode, isResourceError, networkGuard } from './network.js';
 
@@ -45,21 +46,23 @@ export function parseSourceText(source, text) {
   return found;
 }
 
-export async function fetchSource(source, client = axios) {
+export async function fetchSource(source, client = axios, { signal } = {}) {
   let lastError;
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    signal?.throwIfAborted();
     if (networkGuard.paused()) throw Object.assign(new Error('Local network cooldown'), { code: 'NETWORK_COOLDOWN' });
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15000);
     try {
-      const response = await client.get(source[1], { signal: controller.signal, timeout: 15000, maxContentLength: 10 * 1024 * 1024, responseType: 'text' });
+      const response = await client.get(source[1], { signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal, timeout: 15000, maxContentLength: 10 * 1024 * 1024, responseType: 'text' });
       return parseSourceText(source, response.data);
     } catch (error) {
       lastError = error;
+      signal?.throwIfAborted();
       const code = errorCode(error);
       networkGuard.fail(code, settings.checkConcurrency);
       if (isResourceError(code)) throw error;
-      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 500));
+      if (attempt === 0) await delay(500, undefined, { signal });
     } finally {
       clearTimeout(timer);
       controller.abort();
@@ -68,7 +71,7 @@ export async function fetchSource(source, client = axios) {
   throw lastError;
 }
 
-export async function fetchAllSources() {
+export async function fetchAllSources({ signal } = {}) {
   const results = new Array(SOURCES.length);
   let next = 0;
   const worker = async () => {
@@ -76,7 +79,7 @@ export async function fetchAllSources() {
       const index = next++;
       if (index >= SOURCES.length) return;
       try {
-        results[index] = { status: 'fulfilled', value: await fetchSource(SOURCES[index]) };
+        results[index] = { status: 'fulfilled', value: await fetchSource(SOURCES[index], axios, { signal }) };
       } catch (reason) {
         results[index] = { status: 'rejected', reason };
       }

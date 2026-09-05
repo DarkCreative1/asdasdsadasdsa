@@ -12,7 +12,8 @@ const updateSql = `UPDATE proxies SET alive=?, latency_ms=?, last_checked=?, che
   recent_successes=CASE WHEN recent_checks < ? THEN recent_successes+?
     ELSE recent_successes+?-((recent_results >> (?-1)) & 1) END,
   recent_checks=MIN(recent_checks+1, ?), recent_results=((recent_results << 1) | ?) & ?,
-  last_success=CASE WHEN ? THEN ? ELSE last_success END WHERE proxy=?`;
+  last_success=CASE WHEN ? THEN ? ELSE last_success END WHERE proxy=?
+  AND (last_checked IS NULL OR last_checked<=?)`;
 
 export class Database {
   static async open(databasePath = settings.databasePath) {
@@ -58,6 +59,14 @@ export class Database {
         recent_checks=CASE WHEN last_checked IS NULL THEN 0 ELSE 1 END,
         recent_successes=CASE WHEN alive=1 THEN 1 ELSE 0 END`);
     }
+    this.db.run('CREATE TABLE IF NOT EXISTS pool_metadata (key TEXT PRIMARY KEY, value INTEGER NOT NULL)');
+    const previousWindow = this.queryOne("SELECT value FROM pool_metadata WHERE key='stability_window'");
+    if (!previousWindow || previousWindow.value !== settings.minChecks) {
+      // Bits from a different-sized window cannot be used with the new divisor.
+      // Keep lifetime statistics and known-proxy membership, require new checks.
+      this.db.run('UPDATE proxies SET recent_results=0, recent_checks=0, recent_successes=0');
+      this.db.run("INSERT INTO pool_metadata VALUES ('stability_window', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [settings.minChecks]);
+    }
   }
 
   save() {
@@ -70,6 +79,7 @@ export class Database {
       fs.closeSync(file);
       file = undefined;
       fs.renameSync(temporaryPath, this.path);
+      this.dirty = false;
     } finally {
       if (file !== undefined) fs.closeSync(file);
       if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
@@ -105,6 +115,7 @@ export class Database {
     } finally {
       statement.free();
     }
+    this.dirty = true;
     if (persist) this.save();
   }
 
@@ -112,7 +123,7 @@ export class Database {
     this.updateChecks([[proxy, alive, latency]]);
   }
 
-  updateChecks(checks) {
+  updateChecks(checks, { persist = true } = {}) {
     if (!checks.length) return;
     const statement = this.db.prepare(updateSql);
     const checkedAt = new Date().toISOString();
@@ -125,7 +136,7 @@ export class Database {
         statement.run([
           flag, latency, completedAt, flag, alive ? 0 : 1, flag,
           windowSize, flag, flag, windowSize, windowSize, flag, windowMask,
-          flag, completedAt, proxy,
+          flag, completedAt, proxy, completedAt,
         ]);
         statement.reset();
       }
@@ -136,21 +147,25 @@ export class Database {
     } finally {
       statement.free();
     }
-    this.save();
+    this.dirty = true;
+    if (persist) this.save();
   }
 
-  candidates({ aliveOnly = false, staleOnly = false } = {}) {
+  candidates({ aliveOnly = false, staleOnly = false, knownOnly = false,
+    discoveryOnly = false, dueSeconds = settings.staleAfterSeconds } = {}) {
     const conditions = [];
     const params = [];
     if (aliveOnly) conditions.push('alive=1');
+    if (knownOnly) conditions.push('last_success IS NOT NULL');
+    if (discoveryOnly) conditions.push('last_success IS NULL');
     if (staleOnly) {
-      const cutoff = new Date(Date.now() - settings.staleAfterSeconds * 1000).toISOString();
+      const cutoff = new Date(Date.now() - dueSeconds * 1000).toISOString();
       conditions.push('(last_checked IS NULL OR last_checked <= ?)');
       params.push(cutoff);
     }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     return this.queryAll(`SELECT proxy FROM proxies ${where}
-      ORDER BY alive DESC, success_rate DESC,
+      ORDER BY last_checked ASC, alive DESC, success_rate DESC,
         CASE WHEN source LIKE 'monosans-%' THEN 0
              WHEN source LIKE 'proxifly-%' THEN 1
              WHEN source LIKE 'iplocate-%' THEN 2 ELSE 3 END,
@@ -192,11 +207,12 @@ export class Database {
     return new Date(Date.now() - settings.staleAfterSeconds * 1000).toISOString();
   }
 
-  prune() {
-    this.db.run(`DELETE FROM proxies WHERE (last_checked IS NOT NULL AND last_success IS NULL)
-      OR (alive=0 AND recent_checks>=? AND recent_successes=0)`, [settings.minChecks]);
+  prune(excluded = [], { persist = true } = {}) {
+    const exclusion = excluded.length ? `AND proxy NOT IN (${excluded.map(() => '?').join(',')})` : '';
+    this.db.run(`DELETE FROM proxies WHERE ((last_checked IS NOT NULL AND last_success IS NULL)
+      OR (alive=0 AND recent_checks>=? AND recent_successes=0)) ${exclusion}`, [settings.minChecks, ...excluded]);
     const changes = this.db.getRowsModified();
-    if (changes > 0) this.save();
+    if (changes > 0) { this.dirty = true; if (persist) this.save(); }
     return changes;
   }
 
